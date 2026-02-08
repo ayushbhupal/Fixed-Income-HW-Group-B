@@ -62,6 +62,55 @@ sofr_rates['running_max'] = sofr_rates['cum_pnl'].cummax()
 sofr_rates['drawdown'] = sofr_rates['cum_pnl'] - sofr_rates['running_max']
 max_drawdown = sofr_rates['drawdown'].min()
 
+# --- Enhancement: only hold when curve is upward sloping (2nd >= front) ---
+enh_pnl = []
+enh_held_contract = []
+prev_rate = None
+prev_contract = None
+
+for date, row in sofr_rates.iterrows():
+    available = [c for c in contracts_sorted if pd.notna(row[c])]
+    if len(available) < 2:
+        enh_pnl.append(np.nan)
+        enh_held_contract.append(None)
+        prev_rate = None
+        prev_contract = None
+        continue
+
+    front, second = available[0], available[1]
+    r1, r2 = row[front], row[second]
+
+    # Signal: hold only if curve is upward sloping
+    hold = r2 >= r1
+    if not hold:
+        enh_pnl.append(0.0)
+        enh_held_contract.append(None)
+        prev_rate = None
+        prev_contract = None
+        continue
+
+    if prev_rate is None or prev_contract != second:
+        pnl = 0.0
+    else:
+        pnl = -(r2 - prev_rate) * 100 * 25
+
+    enh_pnl.append(pnl)
+    enh_held_contract.append(second)
+    prev_rate = r2
+    prev_contract = second
+
+sofr_rates['enh_pnl'] = enh_pnl
+sofr_rates['enh_cum_pnl'] = pd.Series(enh_pnl, index=sofr_rates.index).fillna(0).cumsum()
+
+enh_daily = sofr_rates['enh_pnl'].dropna()
+enh_mean = enh_daily.mean()
+enh_std = enh_daily.std()
+enh_sharpe = np.sqrt(252) * enh_mean / enh_std if enh_std != 0 else np.nan
+
+enh_running_max = sofr_rates['enh_cum_pnl'].cummax()
+enh_drawdown = sofr_rates['enh_cum_pnl'] - enh_running_max
+enh_max_drawdown = enh_drawdown.min()
+
 # --- Print results ---
 print("="*60)
 print("SOFR 2ND CONTRACT CARRY STRATEGY")
@@ -73,4 +122,14 @@ print(f"Sharpe Ratio:        {sharpe_ratio:.3f}")
 print(f"Maximum Drawdown:    ${max_drawdown:,.2f}")
 print(f"\nAverage Daily P&L:   ${mean_daily_pnl:,.2f}")
 print(f"P&L Std Dev:         ${std_daily_pnl:,.2f}")
+print("="*60)
+
+print("\n" + "="*60)
+print("ENHANCED STRATEGY (HOLD ONLY IF 2ND >= FRONT)")
+print("="*60)
+print(f"Cumulative P&L:      ${sofr_rates['enh_cum_pnl'].iloc[-1]:,.2f}")
+print(f"Sharpe Ratio:        {enh_sharpe:.3f}")
+print(f"Maximum Drawdown:    ${enh_max_drawdown:,.2f}")
+print(f"\nAverage Daily P&L:   ${enh_mean:,.2f}")
+print(f"P&L Std Dev:         ${enh_std:,.2f}")
 print("="*60)
